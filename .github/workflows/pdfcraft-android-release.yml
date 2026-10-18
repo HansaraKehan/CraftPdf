@@ -1,4 +1,4 @@
-Name: Build and release PdfCraft Android APK
+name: Build and release PdfCraft Android APK
 
 # Builds the newest upstream PdfCraft (storytold/pdfcraft) with the Android layer
 # applied on top, then publishes the APK as a GitHub Release.
@@ -56,7 +56,6 @@ jobs:
           repository: ${{ env.UPSTREAM }}
           ref: ${{ steps.ref.outputs.ref }}
           fetch-depth: 0
-          submodules: recursive
           path: src
 
       - name: Work out the release tag
@@ -94,17 +93,6 @@ jobs:
           tar xzf ../fork/android-layer/pdfcraft-android-layer.tar.gz -C "$RUNNER_TEMP/layer"
           python3 "$RUNNER_TEMP/layer/apply_layer.py"
 
-      - name: Ensure rfd-android dependency path exists or fallback
-        if: steps.ver.outputs.skip != 'true'
-        working-directory: src
-        run: |
-          # If the layer expects a vendor folder that wasn't included, create a dummy or handle it
-          if [ ! -d "vendor/rfd-android" ] && [ ! -f "vendor/rfd-android/Cargo.toml" ]; then
-            mkdir -p vendor/rfd-android
-            # If it's a path dependency expected in Cargo.toml workspace, check if we can fetch it or handle it cleanly
-            echo "Checking cargo configuration for rfd-android path overrides..."
-          fi
-
       - uses: actions/setup-java@v4
         if: steps.ver.outputs.skip != 'true'
         with:
@@ -116,7 +104,7 @@ jobs:
         run: |
           # egui 0.36 needs Rust 1.95 even where the workspace still says 1.90: never go below it.
           RUSTV=$(grep -m1 '^rust-version' src/Cargo.toml | cut -d'"' -f2)
-          RUSTV=$(printf '\%s\n\%s\n' "${RUSTV:-1.95}" "1.95" | sort -V | tail -n1)
+          RUSTV=$(printf '%s\n%s\n' "${RUSTV:-1.95}" "1.95" | sort -V | tail -n1)
           rustup toolchain install "$RUSTV" --profile minimal --target "$TARGET"
           rustup default "$RUSTV"
           rustc --version
@@ -189,7 +177,7 @@ jobs:
           "$BT/d8" --release --min-api 28 --lib "$PLATFORM" --output "$B/dex" "$B/classes.jar"
           "$BT/aapt2" compile --dir "$B/res" -o "$B/resources.zip"
           "$BT/aapt2" link -I "$PLATFORM" --manifest packaging/android/AndroidManifest.xml \
-            --version-code "$(($(date +%s) / 60 ))" --version-name "${VERSION}-android.${GITHUB_RUN_NUMBER}" \
+            --version-code "$(( $(date +%s) / 60 ))" --version-name "${VERSION}-android.${GITHUB_RUN_NUMBER}" \
             -o "$B/unsigned.apk" "$B/resources.zip"
 
           B="$B" LIB="target/${TARGET}/release/libpdfcraft_android.so" python3 - <<'PY'
