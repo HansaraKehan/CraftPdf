@@ -4,6 +4,9 @@ An unofficial Android build of [PdfCraft](https://github.com/storytold/pdfcraft)
 written in Rust by the ArtCraft team, a clean-room take on the Acrobat workflow. This build runs it as a native Android
 app (egui + wgpu), not as a web page.
 
+<img width="1440" height="2304" alt="Screenshot_20261021_224437" src="https://github.com/user-attachments/assets/05dfe6f9-f5e3-4234-9635-d98dc74e2b3c" />
+
+
 > **Early preview.** This is a first working port, not a finished product. See [Limitations](#limitations).
 
 This repository does not contain PdfCraft's source. A GitHub Actions workflow downloads the upstream source,
