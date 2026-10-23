@@ -1,4 +1,4 @@
-# PdfCraft for Android (early preview)
+# PdfCraft for Android
 
 An unofficial Android build of [PdfCraft](https://github.com/storytold/pdfcraft), the open-source PDF workbench
 written in Rust by the ArtCraft team, a clean-room take on the Acrobat workflow. This build runs it as a native Android
@@ -7,7 +7,7 @@ app (egui + wgpu), not as a web page.
 <img width="1440" height="2304" alt="Screenshot_20261021_224437" src="https://github.com/user-attachments/assets/05dfe6f9-f5e3-4234-9635-d98dc74e2b3c" />
 
 
-> **Early preview.** This is a first working port, not a finished product. See [Limitations](#limitations).
+> See [Limitations](#limitations).
 
 This repository does not contain PdfCraft's source. A GitHub Actions workflow downloads the upstream source,
 adds a small Android layer, builds the APK and publishes it under [Releases](../../releases).
@@ -22,6 +22,16 @@ You need:
 - a GPU with Vulkan
 
 If an update won't install over an older build, uninstall the old one first.
+
+### 📊 Application Downloads
+
+| Application | Description | Total Downloads | Releases |
+| :--- | :--- | :--- | :--- |
+| **PhotoCraft** | Image editing app | [![Downloads](https://img.shields.io/github/downloads/HansaraKehan/CraftPhoto/total?style=flat-square&color=blue)](https://github.com/HansaraKehan/CraftPhoto/releases) | [View Releases](https://github.com/HansaraKehan/CraftPhoto/releases) |
+| **LightCraft** | Light & theme utility | [![Downloads](https://img.shields.io/github/downloads/HansaraKehan/Craftlight/total?style=flat-square&color=orange)](https://github.com/HansaraKehan/Craftlight/releases) | [View Releases](https://github.com/HansaraKehan/Craftlight/releases) |
+| **WordCraft** | Text utility app | [![Downloads](https://img.shields.io/github/downloads/HansaraKehan/CraftWord/total?style=flat-square&color=green)](https://github.com/HansaraKehan/CraftWord/releases) | [View Releases](https://github.com/HansaraKehan/CraftWord/releases) |
+| **VectorCraft** | Vector graphic tool | [![Downloads](https://img.shields.io/github/downloads/HansaraKehan/CraftVector/total?style=flat-square&color=purple)](https://github.com/HansaraKehan/CraftVector/releases) | [View Releases](https://github.com/HansaraKehan/CraftVector/releases) |
+| **PDFCraft** | PDF manipulation tool | [![Downloads](https://img.shields.io/github/downloads/HansaraKehan/CraftPdf/total?style=flat-square&color=red)](https://github.com/HansaraKehan/CraftPdf/releases) | [View Releases](https://github.com/HansaraKehan/CraftPdf/releases) |
 
 ## Using it
 
