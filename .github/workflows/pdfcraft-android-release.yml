@@ -1,15 +1,15 @@
 name: Build and release PdfCraft Android APK
 
-# Builds the newest upstream PdfCraft (storytold/pdfcraft) with the Android layer
-# applied on top, then publishes the APK as a GitHub Release.
-# It only builds when upstream has something new (or when you run it by hand).
+# Every release of upstream PdfCraft (storytold/pdfcraft) gets a matching Android release here, with the
+# same tag (for example v0.16.1). It is checked once a day and builds only when upstream has published
+# a release that this repository has no release for yet. Changes upstream makes between releases are ignored.
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       ref:
-        description: "Upstream branch or tag to build (empty = main)"
+        description: "Upstream release tag to build, e.g. v0.16.1 (empty = newest upstream release)"
         required: false
         default: ""
       force:
@@ -36,43 +36,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
-      - name: Pick the upstream ref
-        id: ref
-        env:
-          INPUT_REF: ${{ inputs.ref }}
-          VAR_REF: ${{ vars.UPSTREAM_REF }}
-        run: |
-          REF="${INPUT_REF:-${VAR_REF:-main}}"
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-
-      - name: Check out this repository (the Android layer lives here)
-        uses: actions/checkout@v4
-        with:
-          path: fork
-
-      - name: Check out upstream PdfCraft
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.UPSTREAM }}
-          ref: ${{ steps.ref.outputs.ref }}
-          fetch-depth: 0
-          path: src
-
-      - name: Work out the release tag
+      - name: Find the upstream release to build
         id: ver
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref }}
           FORCE: ${{ inputs.force }}
         run: |
-          VER=$(grep -m1 '^version' src/Cargo.toml | cut -d'"' -f2)
-          SHA=$(git -C src rev-parse --short=7 HEAD)
-          LAYER=$(sha256sum fork/android-layer/pdfcraft-android-layer.tar.gz | cut -c1-6)
-          TAG="android-v${VER}-${SHA}-${LAYER}"
-          {
-            echo "version=$VER"
-            echo "sha=$SHA"
-            echo "tag=$TAG"
-          } >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          TAG="$INPUT_REF"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)
+          fi
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Upstream release: $TAG"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             if [ "$FORCE" = "true" ]; then
               gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
@@ -84,6 +63,20 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check out this repository (the Android layer lives here)
+        if: steps.ver.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          path: fork
+
+      - name: Check out upstream PdfCraft at that release
+        if: steps.ver.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ steps.ver.outputs.tag }}
+          path: src
 
       - name: Add the Android layer on top of upstream
         if: steps.ver.outputs.skip != 'true'
@@ -208,22 +201,54 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
           VERSION: ${{ steps.ver.outputs.version }}
-          SHA: ${{ steps.ver.outputs.sha }}
-          REF: ${{ steps.ref.outputs.ref }}
         run: |
-          cat > notes.md <<NOTES
-          **PdfCraft ${VERSION} for Android** (early preview, ARM64)
-
-          Built automatically from upstream \`${UPSTREAM}\` at \`${REF}\` (commit \`${SHA}\`) with the Android layer applied.
-
-          - Needs an ARM64 phone or tablet running Android 9 or newer with a Vulkan GPU.
-          - Download the \`.apk\`, open it, and allow installs from your file manager or browser when Android asks.
-          - No storage permission is needed: Open, Save As and Export use Android's own file picker.
-          - Early preview: no system clipboard or printing yet. A hardware keyboard is recommended.
-          - Unofficial build, not made or supported by the PdfCraft team. If an update will not install over an older build, uninstall the old one first.
-          NOTES
-          if [ -f "$RUNNER_TEMP/layer/whats-new.md" ]; then
-            { echo; echo "## What's new"; echo; cat "$RUNNER_TEMP/layer/whats-new.md"; } >> notes.md
+          set -euo pipefail
+          # 1. Notes written by upstream for this release.
+          gh release view "$TAG" --repo "$UPSTREAM" --json body --jq .body > upstream-notes.md || true
+          if [ ! -s upstream-notes.md ]; then
+            echo "See the upstream release notes: https://github.com/${UPSTREAM}/releases/tag/${TAG}" > upstream-notes.md
           fi
+
+          # 2. The Android "What's new" is shown for one release only: it is skipped when the
+          #    previous release here already carried the same text.
+          NEW=""
+          if [ -s "$RUNNER_TEMP/layer/whats-new.md" ]; then
+            SUM=$(sha256sum "$RUNNER_TEMP/layer/whats-new.md" | cut -c1-12)
+            PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 10 --json tagName \
+              | jq -r --arg t "$TAG" '[.[] | select(.tagName != $t)][0].tagName // empty')
+            SEEN=""
+            if [ -n "$PREV" ]; then
+              SEEN=$(gh release view "$PREV" --repo "$GITHUB_REPOSITORY" --json body --jq .body | grep -o "android-notes:${SUM}" || true)
+            fi
+            if [ -z "$SEEN" ]; then NEW="$SUM"; fi
+          fi
+
+          {
+            echo "**PdfCraft ${VERSION} for Android** (ARM64), built from upstream release \`${TAG}\`."
+            echo
+            echo "## What's new in PdfCraft ${VERSION}"
+            echo
+            cat upstream-notes.md
+            if [ -n "$NEW" ]; then
+              echo
+              echo "## What's new in the Android build"
+              echo
+              cat "$RUNNER_TEMP/layer/whats-new.md"
+              echo
+              echo "<!-- android-notes:${NEW} -->"
+            elif [ -n "${SUM:-}" ]; then
+              echo
+              echo "<!-- android-notes:${SUM} -->"
+            fi
+            echo
+            echo "## Install"
+            echo
+            echo "- Needs an ARM64 phone or tablet running Android 9 or newer with a Vulkan GPU."
+            echo "- Download the \`.apk\`, open it, and allow installs from your file manager or browser when Android asks."
+            echo "- No storage permission is needed: Open, Save As and Export use Android's own file picker."
+            echo "- Early preview: no system clipboard or printing yet. A hardware keyboard is recommended."
+            echo "- Unofficial build, not made or supported by the PdfCraft team. If an update will not install over an older build, uninstall the old one first."
+          } > notes.md
+
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "PdfCraft ${VERSION} Android (${SHA})" --notes-file notes.md
+            --title "PdfCraft ${VERSION} Android" --notes-file notes.md
