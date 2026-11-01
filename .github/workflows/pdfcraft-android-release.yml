@@ -205,7 +205,12 @@ jobs:
           set -euo pipefail
           # 1. Notes written by upstream for this release.
           gh release view "$TAG" --repo "$UPSTREAM" --json body --jq .body > upstream-notes.md || true
-          if [ ! -s upstream-notes.md ]; then
+          # Keep the notes about the app, not about the people: drop the "New Contributors" /
+          # "Contributors" sections and the "by @name" credits in the change list.
+          awk '/^#+ /{skip = ($0 ~ /[Cc]ontributor/)} /^\*\*Full Changelog/{skip=0} !skip{print}' upstream-notes.md \
+            | sed -E 's/ by @[A-Za-z0-9][A-Za-z0-9-]*( in |$)/\1/g; /^[Tt]hanks to .*@/d' > upstream-notes.clean.md
+          mv upstream-notes.clean.md upstream-notes.md
+          if ! grep -q '[^[:space:]]' upstream-notes.md; then
             echo "See the upstream release notes: https://github.com/${UPSTREAM}/releases/tag/${TAG}" > upstream-notes.md
           fi
 
