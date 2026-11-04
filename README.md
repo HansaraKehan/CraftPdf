@@ -596,3 +596,16 @@ Forks and modified versions must remove them.
 </p>
 
 The Tools panel sits on the left, or on the right with Preferences ▸ Tools panel side. The rail stays at the right edge and opens one side panel beside it. Drag a panel's inner edge to resize it; widths are remembered. F4 shows or hides the side panel and Shift+F4 the Tools panel (also in the View menu); View ▸ Reset side panels restores the default arrangement.
+
+## Android features
+
+Kept up to date automatically from each release.
+
+<!-- android-features:start -->
+- 📖 **Opens in Reading mode.** PDFs open in Reading mode by default (you can still change it in Preferences). Installs that already had a saved setting are switched once.
+- 🫥 **Bars hide while reading.** Reading mode shows just the page. Tap the page to bring the bars back, tap again to hide them.
+- ↔️ **The page fills the screen width in Reading mode.** The empty strips beside the page are gone while reading, and come back while a side panel is open. Other modes are unchanged, and you can still zoom as you like.
+- 🔲 **The fit button in the side bar** returns to that full-width fit while reading.
+- 💯 **A zoom button next to the side bar works by touch.** While the bars are shown in Reading mode, a button shows the current zoom; tap it and pick 50% to 300% or Fit to display. (Typing a percentage in the side bar isn't possible without a keyboard.)
+- 🌗 **Follows your phone's light or dark theme** by default. Pick a theme yourself in the app and that choice is kept.
+<!-- android-features:end -->
