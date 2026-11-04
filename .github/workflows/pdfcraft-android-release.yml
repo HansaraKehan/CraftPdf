@@ -3,6 +3,12 @@ name: Build and release PdfCraft Android APK
 # Every release of upstream PdfCraft (storytold/pdfcraft) gets a matching Android release here, with the
 # same tag (for example v0.16.1). It is checked once a day and builds only when upstream has published
 # a release that this repository has no release for yet. Changes upstream makes between releases are ignored.
+#
+# Run it by hand with "Publish a release" switched off to only build: the signed APK is kept as a download
+# on the run page (Artifacts) and nothing is released, tagged or committed.
+#
+# Everything about the layer itself (how it is applied, the release notes, the features list) lives inside
+# android-layer/pdfcraft-android-layer.tar.gz, so this file rarely needs editing.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -16,6 +22,10 @@ on:
         description: "Build again even if this upstream version already has a release"
         type: boolean
         default: false
+      publish:
+        description: "Publish a release (switch off to only build the APK and download it from this run)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -29,6 +39,7 @@ env:
   TARGET: aarch64-linux-android
   NDK_VERSION: 28.2.13676358
   BT_VERSION: 35.0.0
+  MIN_RUST: "1.95"
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -42,27 +53,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_REF: ${{ inputs.ref }}
           FORCE: ${{ inputs.force }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
           set -euo pipefail
+          # Scheduled runs have no inputs: they always publish.
+          PUBLISH="${INPUT_PUBLISH:-true}"
           TAG="$INPUT_REF"
           if [ -z "$TAG" ]; then
             TAG=$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)
           fi
           VER="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          SKIP=false
           echo "Upstream release: $TAG"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          if [ "$PUBLISH" = "true" ] && gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             if [ "$FORCE" = "true" ]; then
               gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-              echo "skip=false" >> "$GITHUB_OUTPUT"
             else
               echo "Release $TAG already exists - nothing to do."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
+              SKIP=true
             fi
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VER"
+            echo "skip=$SKIP"
+            echo "publish=$PUBLISH"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check out this repository (the Android layer lives here)
         if: steps.ver.outputs.skip != 'true'
@@ -95,9 +111,9 @@ jobs:
       - name: Install the Rust version upstream asks for
         if: steps.ver.outputs.skip != 'true'
         run: |
-          # egui 0.36 needs Rust 1.95 even where the workspace still says 1.90: never go below it.
+          # Never go below MIN_RUST (the egui family needs it even where the workspace says less).
           RUSTV=$(grep -m1 '^rust-version' src/Cargo.toml | cut -d'"' -f2)
-          RUSTV=$(printf '%s\n%s\n' "${RUSTV:-1.95}" "1.95" | sort -V | tail -n1)
+          RUSTV=$(printf '%s\n%s\n' "${RUSTV:-$MIN_RUST}" "$MIN_RUST" | sort -V | tail -n1)
           rustup toolchain install "$RUSTV" --profile minimal --target "$TARGET"
           rustup default "$RUSTV"
           rustc --version
@@ -194,8 +210,17 @@ jobs:
           "$BT/apksigner" verify --verbose "$APK"
           echo "APK=$APK" >> "$GITHUB_ENV"
 
+      - name: Keep the APK (build only)
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PdfCraft-android-apk
+          path: src/dist/*.apk
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Publish the release
-        if: steps.ver.outputs.skip != 'true'
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.publish == 'true'
         working-directory: src
         env:
           GH_TOKEN: ${{ github.token }}
@@ -203,57 +228,89 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # 1. Notes written by upstream for this release.
-          gh release view "$TAG" --repo "$UPSTREAM" --json body --jq .body > upstream-notes.md || true
-          # Keep the notes about the app, not about the people: drop the "New Contributors" /
-          # "Contributors" sections and the "by @name" credits in the change list.
-          awk '/^#+ /{skip = ($0 ~ /[Cc]ontributor/)} /^\*\*Full Changelog/{skip=0} !skip{print}' upstream-notes.md \
-            | sed -E 's/ by @[A-Za-z0-9][A-Za-z0-9-]*( in |$)/\1/g; /^[Tt]hanks to .*@/d' > upstream-notes.clean.md
-          mv upstream-notes.clean.md upstream-notes.md
+          # Release notes, in this order:
+          #  1. The Android features that are new in this build: the topmost "## ..." section of
+          #     whats-new.md inside the layer zip (written with every zip). Left out when the previous
+          #     release already showed the same section, so old news never repeats.
+          #  2. What upstream says is new in this version (its own release notes, without contributors).
+          #  3. Install notes.
+          NEWS="$RUNNER_TEMP/layer/whats-new.md"
+          PREV_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 --exclude-drafts --json tagName \
+            | jq -r --arg t "$TAG" '[.[] | select(.tagName != $t)][0].tagName // empty')
+          PREV_BODY=""
+          if [ -n "$PREV_TAG" ]; then
+            PREV_BODY=$(gh release view "$PREV_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || true)
+          fi
+          TOP=""
+          if [ -f "$NEWS" ]; then
+            TOP=$(awk '/^## /{ if (seen) exit; seen = 1; next } seen' "$NEWS")
+          fi
+          TOP_ID=$(printf '%s' "$TOP" | sha1sum | cut -c1-12)
+
+          gh release view "$TAG" --repo "$UPSTREAM" --json body --jq .body > upstream-raw.md 2>/dev/null || true
+          # Keep the notes about the app, not about the people: no "Contributors" sections and no
+          # "by @name" credits; the "Full Changelog" link stays.
+          awk '/^#+ /{skip = ($0 ~ /[Cc]ontributor/)} /^\*\*Full Changelog/{skip=0} !skip{print}' upstream-raw.md \
+            | sed -E 's/ by @[A-Za-z0-9][A-Za-z0-9-]*( in |$)/\1/g; /^[Tt]hanks to .*@/d' > upstream-notes.md
           if ! grep -q '[^[:space:]]' upstream-notes.md; then
             echo "See the upstream release notes: https://github.com/${UPSTREAM}/releases/tag/${TAG}" > upstream-notes.md
           fi
 
-          # 2. The Android "What's new" is shown for one release only: it is skipped when the
-          #    previous release here already carried the same text.
-          NEW=""
-          if [ -s "$RUNNER_TEMP/layer/whats-new.md" ]; then
-            SUM=$(sha256sum "$RUNNER_TEMP/layer/whats-new.md" | cut -c1-12)
-            PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 10 --json tagName \
-              | jq -r --arg t "$TAG" '[.[] | select(.tagName != $t)][0].tagName // empty')
-            SEEN=""
-            if [ -n "$PREV" ]; then
-              SEEN=$(gh release view "$PREV" --repo "$GITHUB_REPOSITORY" --json body --jq .body | grep -o "android-notes:${SUM}" || true)
-            fi
-            if [ -z "$SEEN" ]; then NEW="$SUM"; fi
-          fi
-
           {
-            echo "**PdfCraft ${VERSION} for Android** (ARM64), built from upstream release \`${TAG}\`."
-            echo
+            if [ -n "$(printf '%s' "$TOP" | tr -d '[:space:]')" ] && ! printf '%s' "$PREV_BODY" | grep -qF "android-news:${TOP_ID}"; then
+              HEAD=$(awk '/^## /{ sub(/^## /, ""); print; exit }' "$NEWS")
+              echo "## New in the Android edition: ${HEAD}"
+              echo
+              printf '%s\n' "$TOP"
+              echo
+            fi
             echo "## What's new in PdfCraft ${VERSION}"
             echo
             cat upstream-notes.md
-            if [ -n "$NEW" ]; then
-              echo
-              echo "## What's new in the Android build"
-              echo
-              cat "$RUNNER_TEMP/layer/whats-new.md"
-              echo
-              echo "<!-- android-notes:${NEW} -->"
-            elif [ -n "${SUM:-}" ]; then
-              echo
-              echo "<!-- android-notes:${SUM} -->"
-            fi
             echo
-            echo "## Install"
+            echo "## About this build"
+            echo "**PdfCraft ${VERSION} for Android** (ARM64), built automatically from upstream release \`${TAG}\` of \`${UPSTREAM}\` with the Android edition's layer applied."
             echo
             echo "- Needs an ARM64 phone or tablet running Android 9 or newer with a Vulkan GPU."
             echo "- Download the \`.apk\`, open it, and allow installs from your file manager or browser when Android asks."
             echo "- No storage permission is needed: Open, Save As and Export use Android's own file picker."
             echo "- Early preview: no system clipboard or printing yet. A hardware keyboard is recommended."
             echo "- Unofficial build, not made or supported by the PdfCraft team. If an update will not install over an older build, uninstall the old one first."
+            echo
+            echo "<!-- android-news:${TOP_ID} -->"
           } > notes.md
 
           gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "PdfCraft ${VERSION} Android" --notes-file notes.md
+
+      - name: Keep the README's Android features list current
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.publish == 'true'
+        working-directory: fork
+        run: |
+          # Every "- " feature line of whats-new.md (all sections, so a feature stays listed after it
+          # stops being news) goes between the markers in README.md. Fixes are written with "* " and are
+          # not listed. If the markers are missing they are added at the end of the README.
+          python3 - "$RUNNER_TEMP/layer/whats-new.md" <<'PY'
+          import re, sys, pathlib
+          news = pathlib.Path(sys.argv[1])
+          if not news.exists():
+              sys.exit(0)
+          features = [l.rstrip() for l in news.read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
+          start, end = "<!-- android-features:start -->", "<!-- android-features:end -->"
+          readme = pathlib.Path("README.md")
+          text = readme.read_text(encoding="utf-8") if readme.exists() else ""
+          if start not in text:
+              text = text.rstrip() + f"\n\n## Android features\n\nKept up to date automatically from each release.\n\n{start}\n{end}\n"
+          block = start + "\n" + "\n".join(features) + "\n" + end
+          text = re.sub(re.escape(start) + r".*?" + re.escape(end), lambda m: block, text, flags=re.S)
+          readme.write_text(text, encoding="utf-8")
+          PY
+          if ! git diff --quiet -- README.md; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "Update the Android features list in README [skip ci]"
+            BR="${GITHUB_REF_NAME}"
+            git pull --rebase -q origin "$BR" || true
+            git push origin "HEAD:${BR}" || echo "::warning::couldn't push the README update (the branch moved meanwhile)"
+          fi
